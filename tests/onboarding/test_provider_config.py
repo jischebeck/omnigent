@@ -889,3 +889,36 @@ def test_provider_credential_env_vars_empty_for_keychain_and_auth_command() -> N
         }
     }
     assert provider_credential_env_vars(config) == frozenset()
+
+
+def test_build_local_provider_entry_and_parse() -> None:
+    """build_local_provider_entry builds a correct kind: local provider that parses."""
+    from omnigent.onboarding.configure_models import build_local_provider_entry
+    from omnigent.onboarding.provider_config import CHAT_WIRE_API, OPENAI_FAMILY
+
+    body = build_local_provider_entry(
+        base_url="http://localhost:8080/v1",
+        api_key="not-needed",
+        families=[OPENAI_FAMILY],
+        wire_api=CHAT_WIRE_API,
+        models={OPENAI_FAMILY: "local"},
+    )
+
+    assert body["kind"] == "local"
+    assert OPENAI_FAMILY in body
+    assert body[OPENAI_FAMILY]["base_url"] == "http://localhost:8080/v1"
+    assert body[OPENAI_FAMILY]["api_key"] == "not-needed"
+    assert body[OPENAI_FAMILY]["wire_api"] == CHAT_WIRE_API
+    assert body[OPENAI_FAMILY]["models"] == {"default": "local"}
+
+    providers = load_providers({"providers": {"local-llama": body}})
+    entry = providers["local-llama"]
+    assert entry.kind == "local"
+    assert entry.name == "local-llama"
+    assert OPENAI_FAMILY in entry.families
+    family = entry.family(OPENAI_FAMILY)
+    assert family is not None
+    assert family.base_url == "http://localhost:8080/v1"
+    assert family.api_key == "not-needed"
+    assert family.wire_api == CHAT_WIRE_API
+    assert family.default_model == "local"

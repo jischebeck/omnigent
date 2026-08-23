@@ -463,6 +463,11 @@ def add_menu_options() -> list[AddOption]:
             GATEWAY_KIND,
         ),
         _opt(
+            "Local — local llama.cpp connection",
+            "A local model connection (llama.cpp, Ollama, vLLM, …).",
+            LOCAL_KIND,
+        ),
+        _opt(
             "OpenRouter — API key",
             "One key, many models (openrouter.ai).",
             KEY_KIND,
@@ -517,7 +522,7 @@ def _add_option_families(opt: AddOption) -> frozenset[str]:
     :returns: The surfaces this option can configure — a subset of
         ``{"anthropic", "openai", "gemini", "pi"}``.
     """
-    if opt.kind == GATEWAY_KIND or opt.kind == DATABRICKS_KIND:
+    if opt.kind == GATEWAY_KIND or opt.kind == DATABRICKS_KIND or opt.kind == LOCAL_KIND:
         return frozenset({ANTHROPIC_FAMILY, OPENAI_FAMILY, PI_SURFACE})
     if opt.kind == BEDROCK_KIND:
         # Bedrock mode drives only the native Claude terminal (anthropic
@@ -935,3 +940,37 @@ def build_databricks_provider_entry(profile: str) -> dict[str, object]:
         ``{"kind": "databricks", "profile": "oss"}``.
     """
     return {"kind": DATABRICKS_KIND, "profile": profile}
+
+
+def build_local_provider_entry(
+    base_url: str,
+    api_key: str,
+    *,
+    families: list[str],
+    wire_api: str | None = None,
+    models: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Build a ``kind: local`` provider entry body (config shape).
+
+    :param base_url: The local endpoint base URL, e.g.
+        ``"http://localhost:8080/v1"``.
+    :param api_key: Dummy or local API key, e.g. ``"not-needed"``.
+    :param families: The families the local provider serves, a non-empty subset
+        of ``["openai", "anthropic"]``.
+    :param wire_api: Wire protocol for the **openai** family —
+        ``"responses"`` (OpenAI / LiteLLM) or ``"chat"`` (llama.cpp / Ollama).
+    :param models: Optional per-family default model id.
+    :returns: A provider entry body.
+    """
+    if not families:
+        raise ValueError("a local provider must serve at least one family")
+    models = models or {}
+    body: dict[str, object] = {"kind": LOCAL_KIND}
+    for family in families:
+        block: dict[str, object] = {"base_url": base_url, "api_key": api_key}
+        if family == OPENAI_FAMILY and wire_api is not None:
+            block["wire_api"] = wire_api
+        if models.get(family):
+            block["models"] = {"default": models[family]}
+        body[family] = block
+    return body

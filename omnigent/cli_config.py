@@ -572,6 +572,7 @@ def _configure_harness_add(family: str | None = None) -> str | None:
         build_databricks_provider_entry,
         build_gateway_provider_entry,
         build_key_provider_entry,
+        build_local_provider_entry,
         build_subscription_provider_entry,
         default_base_url_for_family,
         family_for_key_provider,
@@ -586,6 +587,7 @@ def _configure_harness_add(family: str | None = None) -> str | None:
         CHAT_WIRE_API,
         CLI_CONFIG_KIND,
         DATABRICKS_KIND,
+        LOCAL_KIND,
         OPENAI_FAMILY,
         PI_SURFACE,
         RESPONSES_WIRE_API,
@@ -919,6 +921,64 @@ def _configure_harness_add(family: str | None = None) -> str | None:
             base_url=base_url,
             api_key_ref=api_key_ref,
             default_model=default_model,
+        )
+
+    elif kind == LOCAL_KIND:
+        name = prompt_text("Name for this local provider", default="llama.cpp")
+        base_url = prompt_text(
+            "Local endpoint base_url (e.g. http://localhost:8080/v1)",
+            default="http://localhost:8080/v1",
+        ).strip()
+        # Which harness surfaces
+        surface_choice = select(
+            "Which harnesses can this local provider drive?",
+            [
+                "Codex / OpenAI only (codex, openai-agents)",
+                "Both Claude and Codex",
+                "Claude only (claude-sdk, native-claude)",
+            ],
+            default=0,
+            clear_on_exit=True,
+        )
+        if surface_choice < 0:  # Esc — abort the add
+            return None
+        families = (
+            [OPENAI_FAMILY, ANTHROPIC_FAMILY]
+            if surface_choice == 1
+            else [OPENAI_FAMILY]
+            if surface_choice == 0
+            else [ANTHROPIC_FAMILY]
+        )
+        wire_api: str | None = None
+        if OPENAI_FAMILY in families:
+            wire_choice = select(
+                "OpenAI wire protocol for this local provider?",
+                [
+                    "Chat Completions (llama.cpp, Ollama, vLLM)",
+                    "Responses API (OpenAI, LiteLLM)",
+                ],
+                default=0,
+                clear_on_exit=True,
+            )
+            if wire_choice < 0:  # Esc — abort the add
+                return None
+            wire_api = CHAT_WIRE_API if wire_choice == 0 else RESPONSES_WIRE_API
+        models: dict[str, str] = {}
+        if OPENAI_FAMILY in families:
+            models[OPENAI_FAMILY] = prompt_text(
+                "Default model for the Codex / OpenAI surface",
+                default="local",
+            ).strip()
+        if ANTHROPIC_FAMILY in families:
+            models[ANTHROPIC_FAMILY] = prompt_text(
+                "Default model for the Claude surface (the local server's Claude model id)"
+            ).strip()
+        entry = build_local_provider_entry(
+            base_url=base_url,
+            api_key="not-needed",
+            families=families,
+            wire_api=wire_api,
+            models=models,
         )
 
     else:  # databricks
