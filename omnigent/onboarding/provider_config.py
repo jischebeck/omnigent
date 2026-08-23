@@ -593,6 +593,11 @@ def _parse_family(provider_name: str, family_name: str, raw: dict[str, object]) 
     # Exactly one of {api_key, api_key_ref, auth_command} must be set.
     api_key_raw = raw.get("api_key")
     api_key_ref_raw = raw.get("api_key_ref")
+    if isinstance(api_key_ref_raw, dict):
+        if "env" in api_key_ref_raw and isinstance(api_key_ref_raw["env"], str):
+            api_key_ref_raw = f"env:{api_key_ref_raw['env']}"
+        elif "keychain" in api_key_ref_raw and isinstance(api_key_ref_raw["keychain"], str):
+            api_key_ref_raw = f"keychain:{api_key_ref_raw['keychain']}"
     auth_command_raw = raw.get("auth_command")
     present = [
         ("api_key", api_key_raw),

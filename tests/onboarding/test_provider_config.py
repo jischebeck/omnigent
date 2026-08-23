@@ -922,3 +922,24 @@ def test_build_local_provider_entry_and_parse() -> None:
     assert family.api_key == "not-needed"
     assert family.wire_api == CHAT_WIRE_API
     assert family.default_model == "local"
+
+
+def test_api_key_ref_dict_format_parsed_correctly() -> None:
+    """A provider with api_key_ref specified as a dict is parsed correctly."""
+    from omnigent.onboarding.provider_config import GEMINI_FAMILY
+
+    raw = {
+        "kind": "key",
+        "gemini": {
+            "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+            "api_key_ref": {"env": "GEMINI_API_KEY"},
+        },
+    }
+    providers = load_providers({"providers": {"gemini-provider": raw}})
+    entry = providers["gemini-provider"]
+    assert entry.kind == "key"
+    assert entry.name == "gemini-provider"
+    assert GEMINI_FAMILY in entry.families
+    family = entry.families[GEMINI_FAMILY]
+    assert family is not None
+    assert family.api_key_ref == "env:GEMINI_API_KEY"
