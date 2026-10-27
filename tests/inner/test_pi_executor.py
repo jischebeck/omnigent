@@ -22,6 +22,7 @@ import pytest
 
 from omnigent.inner.databricks_executor import DatabricksCredentials
 from omnigent.inner.executor import (
+    CompactionComplete,
     ExecutorConfig,
     ExecutorError,
     ReasoningChunk,
@@ -35,6 +36,7 @@ from omnigent.inner.pi_executor import (
     PiExecutor,
     PiSubprocessConfig,
     _build_models_json,
+    _build_pi_prompt,
     _databricks_model_wire_catalog,
     _generate_extension_js,
     _only_configured_family,
@@ -6587,3 +6589,75 @@ async def test_generic_catalog_discovery_does_not_block_runtime(
             beat.cancel()
             await asyncio.gather(beat, return_exceptions=True)
         await executor.close()
+
+
+def test_build_pi_prompt_with_compaction_boundary():
+    """Verify _build_pi_prompt prunes pre-compaction history on first turn."""
+    messages = [
+        {"role": "user", "content": "Initial prompt"},
+        {"role": "assistant", "content": "Lengthy file dump that was later compacted..."},
+        {"role": "compaction", "content": "Summary: user requested initial prompt and file dump."},
+        {"role": "user", "content": "Second turn question"},
+        {"role": "assistant", "content": "Second turn answer"},
+        {"role": "user", "content": "Latest user request"},
+    ]
+    prompt = _build_pi_prompt(messages, is_first_turn=True)
+    assert isinstance(prompt, str)
+    # Verifies pre-compaction turns were pruned
+    assert "Lengthy file dump" not in prompt
+    assert "[Previous context was compacted:" in prompt
+    assert "Summary: user requested initial prompt" in prompt
+    assert "Second turn question" in prompt
+    assert "Second turn answer" in prompt
+    assert "Latest user request" in prompt
+
+
+def test_build_pi_prompt_without_compaction():
+    """Verify _build_pi_prompt includes full history when no compaction occurred."""
+    messages = [
+        {"role": "user", "content": "First turn"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second turn"},
+    ]
+    prompt = _build_pi_prompt(messages, is_first_turn=True)
+    assert isinstance(prompt, str)
+    assert "Conversation so far:" in prompt
+    assert "First turn" in prompt
+    assert "Second turn" in prompt
+
+
+def test_run_turn_emits_compaction_complete() -> None:
+    """Verify compaction_end event from Pi emits CompactionComplete."""
+
+    async def _test() -> None:
+        answer = _assistant_message("Done")
+        executor, _rpc = _session_executor(
+            [
+                _rpc_frame(type="response", success=True),
+                _rpc_frame(
+                    type="compaction_end",
+                    reason="threshold",
+                    result={
+                        "tokensAfter": 1234,
+                        "summary": "Compacted history summary",
+                    },
+                    aborted=False,
+                    willRetry=False,
+                ),
+                _rpc_frame(type="message_start", message={"role": "assistant"}),
+                _text_delta_frame("Done"),
+                _rpc_frame(type="message_end", message=answer),
+                _rpc_frame(type="agent_end", messages=[answer], willRetry=False),
+                _rpc_frame(type="agent_settled"),
+            ]
+        )
+
+        events = await _run_session_turn(executor, "hello")
+        compactions = [e for e in events if isinstance(e, CompactionComplete)]
+        assert len(compactions) == 1
+        comp = compactions[0]
+        assert comp.token_count == 1234
+        assert comp.summary == "Compacted history summary"
+
+    _run(_test())
+

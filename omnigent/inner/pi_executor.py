@@ -98,6 +98,7 @@ from .async_utils import run_sync_on_thread
 from .databricks_executor import _read_databrickscfg
 from .datamodel import OSEnvSandboxSpec, OSEnvSpec
 from .executor import (
+    CompactionComplete,
     Executor,
     ExecutorConfig,
     ExecutorError,
@@ -1581,8 +1582,10 @@ def _build_pi_prompt(messages: list[Message], *, is_first_turn: bool) -> str | l
     Build the prompt to send to Pi.
 
     On the first turn with prior history (e.g. sub-agent with
-    ``pass_history=True``), serializes the full conversation so
-    the Pi process has context. Otherwise returns just the
+    ``pass_history=True``), serializes the conversation so
+    the Pi process has context. If prior compactions occurred,
+    prunes history prior to the latest compaction boundary to prevent
+    context window overflow (>100%). Otherwise returns just the
     latest user message content (may be multimodal).
 
     :param messages: Omnigent conversation history for the
@@ -1595,11 +1598,30 @@ def _build_pi_prompt(messages: list[Message], *, is_first_turn: bool) -> str | l
     user_messages = [m for m in messages if m.get("role") == "user"]
 
     if is_first_turn and len(messages) > 1 and len(user_messages) > 1:
-        lines = ["Conversation so far:"]
-        for msg in messages:
+        # Locate the most recent compaction boundary, if one exists in the history
+        compaction_idx: int | None = None
+        compaction_summary: str | None = None
+        for i, msg in enumerate(messages):
+            role = msg.get("role")
+            msg_type = msg.get("type")
+            if role in ("compaction", "compact") or msg_type == "compaction":
+                compaction_idx = i
+                compaction_summary = _extract_text(msg)
+
+        if compaction_idx is not None:
+            # Replay starts from the compaction checkpoint onward
+            replay_slice = messages[compaction_idx + 1 :]
+            comp_text = compaction_summary or "Summary recorded"
+            lines = [f"[Previous context was compacted: {comp_text}]"]
+        else:
+            replay_slice = messages
+            lines = ["Conversation so far:"]
+
+        for msg in replay_slice:
             role = str(msg.get("role") or "user").replace("_", " ")
             text = _extract_text(msg)
-            lines.append(f"{role}: {text}")
+            if text:
+                lines.append(f"{role}: {text}")
         lines.append("")
         lines.append(
             "Respond to the latest user message, using the conversation above as context."
@@ -3213,6 +3235,23 @@ class PiExecutor(Executor):
                         )
                     )
                     return
+
+                # Build CompactionComplete event so Omnigent persists the compaction
+                # checkpoint and prunes pre-compaction history on subsequent resumes.
+                res = event.get("result") or {}
+                tokens_after = res.get("tokensAfter") or res.get("tokens_after") or 0
+                summary = res.get("summary") or ""
+                if not summary:
+                    summary = (
+                        f"[Pi auto-compaction completed — context compacted to "
+                        f"{tokens_after} tokens]"
+                    )
+
+                yield CompactionComplete(
+                    summary=summary,
+                    token_count=int(tokens_after),
+                    model=model,
+                )
                 continue
 
             if event_type == "extension_ui_request":
